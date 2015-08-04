@@ -1,6 +1,7 @@
 (ns stoic.bootstrap
   "Bootstrap a component system with components and settings."
   (:require [clojure.tools.logging :as log]
+            [clojure.stacktrace :refer [print-stack-trace]]
             [com.stuartsierra.component :as component]
             [stoic.config.file :as file]
             [stoic.protocols.config-supplier :as cs]))
@@ -12,52 +13,37 @@
       (require 'stoic.config.curator)
       ((resolve 'stoic.config.curator/config-supplier)))))
 
-(defn- inject-components
-  "Inject components associating in the respective settings as an atom.
-   Returns a new SystemMap."
-  [component-settings system]
-  (apply component/system-map
-         (reduce into []
-                 (for [[k c] system]
-                   [k (or (and (:settings c) c)
-                          (assoc c :settings (get component-settings k)))]))))
-
 (defn- fetch-settings
   "Fetch settings from the config supplier and wrap in atoms."
   [config-supplier system]
-  (into {} (for [[k c] system
-                 :when (not (:settings c))]
-             [k (atom (cs/fetch config-supplier k))])))
+  (into {} (for [[k p] system]
+             (do
+              [k (atom (cs/fetch config-supplier p))]))))
 
-(defn- bounce-component! [config-supplier k c settings-atom]
-  (let [settings (cs/fetch config-supplier k)]
+(defn- update-settings [config-supplier settings-atom k p]
+  (log/info "Updating settings for: " k)
+  (let [settings (cs/fetch config-supplier p)]
+    (log/info (format "New settings for %s: %s" k settings))
     (when (not= @settings-atom settings)
-      (component/stop c)
-      (reset! settings-atom settings)
-      (component/start c))))
+      (reset! settings-atom settings))))
 
-(defn- bounce-components-if-config-changes!
-  "Add watchers to config to bounce relevant component if config changes."
-  [config-supplier components component-settings]
-  (doseq [[k c] components
-          :let [settings-atom (get component-settings k)]
-          :when settings-atom]
-    (cs/watch! config-supplier k
-               (partial bounce-component! config-supplier k c settings-atom))))
+(defn- watch-for-changes [config-supplier paths settings]
+  (doseq [[k p] paths
+          :let [s (k settings)]
+          :when s]
+    (cs/watch! config-supplier p (partial update-settings config-supplier s k p))))
 
 (defn bootstrap
   "Inject system with settings fetched from a config-supplier.
    Components will be bounced when their respective settings change.
    Returns a SystemMap with Stoic config attached."
-  ([system]
-     (bootstrap (choose-supplier) system))
-  ([config-supplier system]
+  ([settings-paths]
+     (bootstrap (choose-supplier) settings-paths))
+  ([config-supplier settings-paths]
      (let [config-supplier-component (component/start config-supplier)
-           component-settings (fetch-settings config-supplier-component system)
-           system (inject-components component-settings system)]
-       (bounce-components-if-config-changes!
-        config-supplier-component system component-settings)
-       (assoc system :stoic-config config-supplier-component))))
+           component-settings (fetch-settings config-supplier-component settings-paths)]
+       (watch-for-changes config-supplier-component settings-paths component-settings)
+       (assoc component-settings :stoic-config config-supplier-component))))
 
 (defn start-safely
   "Will start a system.
@@ -74,3 +60,17 @@
         (catch Throwable t
           (log/error t "Could not shutdown system")
           system)))))
+
+(defn start [system]
+  (try
+    (alter-var-root system component/start)
+    (catch Exception e
+      (log/error "Caught exception during startup: " (.getMessage e))
+      (when (.getCause e)
+        (log/info (format "Original Error: %s\n%s"
+                          (-> e .getCause .getMessage)
+                          (with-out-str (-> e .getCause print-stack-trace)))))
+      (log/info "Shutting down components: ")
+     (doseq [[n c] (-> e ex-data :system)]
+       (log/info n)
+       (.stop c)))))

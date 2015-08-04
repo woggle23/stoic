@@ -13,4 +13,4 @@
      (when form (read-string (String. form ^String charset)))))
 
 (defn path-for [root k]
-  (format "/stoic/%s/components/%s" (name root) (name k)))
+  (format "%s/%s" root (apply str (interpose "/" (map name k)))))

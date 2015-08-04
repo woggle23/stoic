@@ -51,8 +51,8 @@
         (.. client create (forPath path nil)))
       (read-from-zk client path)))
 
-  (watch! [{:keys [client]} k watcher-fn]
-    (let [path (path-for root k)]
+  (watch! [{:keys [client root] :as this} p watcher-fn]
+    (let [path (path-for root p)]
       (watch-path client path
                   (reify CuratorWatcher
                     (process [this event]
@@ -61,5 +61,8 @@
                         (watcher-fn)
                         (watch-path client path this))))))))
 
-(defn config-supplier []
-  (CuratorConfigSupplier. (zk-root)))
+(defn config-supplier
+  ([]
+     (CuratorConfigSupplier. (zk-root)))
+  ([root]
+     (CuratorConfigSupplier. root)))

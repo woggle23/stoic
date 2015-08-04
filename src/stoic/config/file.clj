@@ -36,42 +36,55 @@
   "Filter out all file system events that do not match the stoic config file modification or creation"
   (and (= config-path (.getAbsolutePath (:file f))) (not= (:action f) :delete)))
 
-(defn reload-config! [config-atom config-path watch-fn-atom file-events]
+(defn reload-config! [config config-path watch-fns file-events]
   "If the stoic config file has changed, reload the config and call the optional watch function"
-  (when (not-empty (filter (partial config-file-change? config-path) file-events))
-    (log/info "Reloading config...")
-    (reset! config-atom (read-config config-path))
-    (when @watch-fn-atom
-      (@watch-fn-atom))))
+  (log/debug "reload-config! called")
+  (when (config-file-change? config-path file-events)
+    (log/debug "Reloading config...")
+    (let [old-config @config
+          new-config (read-config config-path)]
+      (reset! config new-config)
+      (doseq [[path watch-fn] @watch-fns]
+        (when-not (= (get-in old-config path) (get-in new-config path))
+          (watch-fn))))))
 
-(defrecord FileConfigSupplier []
+(defrecord FileConfigSupplier [file-path]
   stoic.protocols.config-supplier/ConfigSupplier
   component/Lifecycle
 
-  (start [this]
-    (let [config-path (*read-config-path*)
-          config-dir (.getParentFile (io/as-file config-path))]
-      (try
-        (let [
-               config-atom (atom (read-config config-path))
-               watch-fn-atom (atom nil)
-               config-watcher (watch-dir (partial reload-config! config-atom config-path watch-fn-atom) config-dir)]
-          (assoc this :config config-atom :config-watcher config-watcher :watch-fn watch-fn-atom))
-        (catch AccessDeniedException e
-          (do
-            (log/fatal "Unable to assign watcher to directory " (.getAbsolutePath config-dir) " check permissions")
-            (throw e))))))
+  (start [{:keys [config-watcher] :as this}]
+    (if-not config-watcher
+      (let [config-path (.getAbsolutePath (io/file (or file-path (*read-config-path*))))
+            config-dir (.getParentFile (io/as-file config-path))]
+        (try
+          (let [
+                config (atom (read-config config-path))
+                watch-fns (atom [])
+                config-watcher (watch-dir
+                               (partial reload-config! config
+                                        config-path watch-fns) config-dir)]
+            (assoc this :config config
+                   :config-watcher config-watcher
+                   :watch-fns watch-fns))
+          (catch AccessDeniedException e
+           (do
+             (log/fatal "Unable to assign watcher to directory " (.getAbsolutePath config-dir) " check permissions")
+             (throw e)))))
+      this))
 
-  (stop [this]
-    (when-let [watcher (:config-watcher this)]
-      (close-watcher watcher))
-    this)
+  (stop [{:keys [config-watcher] :as this}]
+    (when config-watcher
+      (close-watcher config-watcher))
+    (dissoc this :config-watcher :watch-fns))
 
-  (fetch [this component]
-    (@(:config this) component))
+  (fetch [this path]
+    (get-in @(:config this) path))
 
-  (watch! [{:keys [watch-fn]} k watcher-function]
-    (reset! watch-fn watcher-function)))
+  (watch! [{:keys [watch-fns]} path watch-fn]
+    (swap! watch-fns conj [path watch-fn])))
 
-(defn config-supplier []
-  (FileConfigSupplier.))
+(defn config-supplier
+  ([]
+     (FileConfigSupplier. nil))
+  ([file-path]
+     (FileConfigSupplier. file-path)))
