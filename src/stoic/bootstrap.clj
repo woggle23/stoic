@@ -73,4 +73,5 @@
       (log/info "Shutting down components: ")
      (doseq [[n c] (-> e ex-data :system)]
        (log/info n)
-       (.stop c)))))
+       (.stop c))
+     :start-error)))
