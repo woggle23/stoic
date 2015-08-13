@@ -63,7 +63,7 @@
 
 (defn start [system]
   (try
-    (alter-var-root system component/start)
+    (component/start system)
     (catch Exception e
       (log/error "Caught exception during startup: " (.getMessage e))
       (when (.getCause e)
