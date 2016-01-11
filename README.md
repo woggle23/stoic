@@ -134,3 +134,7 @@ Any updates made to the configuration will be available from the `stoic-config` 
 	;; normally refresh would be called here
 	(go))
 ```
+
+# Gotcha
+
+When using a file-based config supplier, ensure the config file is in a directory with few other files. Stoic uses [dirwatch](https://github.com/juxt/dirwatch) to keep track of config updates. In the event that there are many files in the configuration's parent directory, startup time and config updates will be slow.
