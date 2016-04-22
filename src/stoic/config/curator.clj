@@ -1,21 +1,15 @@
 (ns stoic.config.curator
   (:require [curator.framework :refer (curator-framework)]
-            [curator.discovery :refer (service-discovery service-instance service-provider instance instances services note-error)]
-            [stoic.protocols.config-supplier]
-            [stoic.config.data :refer :all]
-            [stoic.config.env :refer :all]
-            [com.stuartsierra.component :as component]
-            [clojure.tools.logging :as log]
-            [stoic.config.exhibitor :refer :all])
-  (:import [org.apache.curator.framework.api
-            CuratorWatcher CuratorEventType]))
+            [stoic.protocols.config-supplier :refer [ConfigSupplier]]
+            [stoic.config.data :refer [serialize-form deserialize-form path-for]]
+            [com.stuartsierra.component :refer [Lifecycle]]
+            [clojure.tools.logging :as log])
+  (:import [org.apache.curator.framework.api CuratorWatcher CuratorEventType]))
 
-(defn connect
-  ([] (connect (or (and (exhibitor-host) (exhibitor-framework))
-                   (curator-framework (zk-ips)))))
-  ([client]
-     (.start client)
-     client))
+(defn- connect [zk-conn]
+  (let [client (curator-framework zk-conn)]
+    (.start client)
+    client))
 
 (defn close [client]
   (.close client))
@@ -32,12 +26,12 @@
   (.. client checkExists watched (usingWatcher watcher)
       (forPath path)))
 
-(defrecord CuratorConfigSupplier [root]
-  stoic.protocols.config-supplier/ConfigSupplier
-  component/Lifecycle
+(defrecord CuratorConfigSupplier [zk-conn root]
+  ConfigSupplier
+  Lifecycle
 
   (start [{:keys [client] :as this}]
-    (if client this (assoc this :client (connect))))
+    (if client this (assoc this :client (connect zk-conn))))
 
   (stop [{:keys [client] :as this}]
     (when client
@@ -61,8 +55,5 @@
                         (watcher-fn)
                         (watch-path client path this))))))))
 
-(defn config-supplier
-  ([]
-     (CuratorConfigSupplier. (zk-root)))
-  ([root]
-     (CuratorConfigSupplier. root)))
+(defn config-supplier [config]
+  (CuratorConfigSupplier. (:zk-conn config) (:path config)))

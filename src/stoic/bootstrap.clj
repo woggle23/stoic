@@ -3,15 +3,7 @@
   (:require [clojure.tools.logging :as log]
             [clojure.stacktrace :refer [print-stack-trace]]
             [com.stuartsierra.component :as component]
-            [stoic.config.file :as file]
             [stoic.protocols.config-supplier :as cs]))
-
-(defn choose-supplier []
-  (if (file/enabled?)
-    (file/config-supplier)
-    (do
-      (require 'stoic.config.curator)
-      ((resolve 'stoic.config.curator/config-supplier)))))
 
 (defn- fetch-settings
   "Fetch settings from the config supplier and wrap in atoms."
@@ -37,29 +29,11 @@
   "Inject system with settings fetched from a config-supplier.
    Components will be bounced when their respective settings change.
    Returns a SystemMap with Stoic config attached."
-  ([settings-paths]
-     (bootstrap (choose-supplier) settings-paths))
-  ([config-supplier settings-paths]
-     (let [config-supplier-component (component/start config-supplier)
-           component-settings (fetch-settings config-supplier-component settings-paths)]
-       (watch-for-changes config-supplier-component settings-paths component-settings)
-       (assoc component-settings :stoic-config config-supplier-component))))
-
-(defn start-safely
-  "Will start a system.
-   If an error occurs in any of the components when the system starts,
-   the error will be caught and an attempted system shutdown performed."
-  [system]
-  (try
-    (component/start system)
-    (catch Throwable t
-      (try
-        (log/error t "Could not start up system, attempting to shutdown")
-        (println "Error occuring starting system, check logs.")
-        (component/stop system)
-        (catch Throwable t
-          (log/error t "Could not shutdown system")
-          system)))))
+  [config-supplier settings-paths]
+  (let [config-supplier-component (component/start config-supplier)
+        component-settings (fetch-settings config-supplier-component settings-paths)]
+    (watch-for-changes config-supplier-component settings-paths component-settings)
+    (assoc component-settings :stoic-config config-supplier-component)))
 
 (defn start [system]
   (try
@@ -73,5 +47,5 @@
       (log/info "Shutting down components: ")
      (doseq [[n c] (-> e ex-data :system)]
        (log/info n)
-       (.stop c))
+       (component/stop c))
      :start-error)))

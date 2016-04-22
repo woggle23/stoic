@@ -1,31 +1,14 @@
 (ns stoic.config.file
   "Loads stoic config from a file containing edn.The file is watched for changes and config is reloaded when they occur."
-  (:import (java.nio.file AccessDeniedException))
-  (:require [stoic.protocols.config-supplier]
-            [clojure.tools.logging :as log]
+  (:require [clojure.tools.logging :as log]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as string]
-            [environ.core :as environ]
-            [com.stuartsierra.component :as component]
-            [juxt.dirwatch :refer (watch-dir close-watcher)]))
+            [com.stuartsierra.component :refer [Lifecycle]]
+            [stoic.protocols.config-supplier :refer [ConfigSupplier]]
+            [juxt.dirwatch :refer [watch-dir close-watcher]])
+  (:import (java.nio.file AccessDeniedException)))
 
-(defn read-config-path []
-  (let [path (environ/env :am-config-path)]
-    (when (string/blank? path)
-      (throw (IllegalArgumentException.
-               "Please set AM_CONFIG_PATH environment variable to the absolute path of your application config file")))
-    path))
-
-(def ^:dynamic *read-config-path* read-config-path)
-
-(defn enabled? []
-  (try
-    (*read-config-path*)
-    true
-    (catch IllegalArgumentException e false)))
-
-(defn read-config [file-path]
+(defn- read-config [file-path]
   "Reads the edn based config from the specified file"
   (log/info "Reading config from file: " file-path)
   (let [config (edn/read-string (slurp file-path))]
@@ -36,7 +19,7 @@
   "Filter out all file system events that do not match the stoic config file modification or creation"
   (and (= config-path (.getAbsolutePath (:file f))) (not= (:action f) :delete)))
 
-(defn reload-config! [config config-path watch-fns file-events]
+(defn- reload-config! [config config-path watch-fns file-events]
   "If the stoic config file has changed, reload the config and call the optional watch function"
   (log/debug "reload-config! called")
   (when (config-file-change? config-path file-events)
@@ -49,26 +32,26 @@
           (watch-fn))))))
 
 (defrecord FileConfigSupplier [file-path]
-  stoic.protocols.config-supplier/ConfigSupplier
-  component/Lifecycle
+  ConfigSupplier
+  Lifecycle
 
   (start [{:keys [config-watcher] :as this}]
     (if-not config-watcher
-      (let [config-path (.getAbsolutePath (io/file (or file-path (*read-config-path*))))
+      (let [config-path (.getAbsolutePath (io/file file-path))
             config-dir (.getParentFile (io/as-file config-path))]
         (try
-          (let [
-                config (atom (read-config config-path))
+          (let [config (atom (read-config config-path))
                 watch-fns (atom [])
                 config-watcher (watch-dir
-                               (partial reload-config! config
-                                        config-path watch-fns) config-dir)]
+                                (partial reload-config! config
+                                         config-path watch-fns) config-dir)]
             (assoc this :config config
                    :config-watcher config-watcher
                    :watch-fns watch-fns))
           (catch AccessDeniedException e
            (do
-             (log/fatal "Unable to assign watcher to directory " (.getAbsolutePath config-dir) " check permissions")
+             (log/fatal "Unable to assign watcher to directory "
+                        (.getAbsolutePath config-dir) " check permissions")
              (throw e)))))
       this))
 
@@ -83,8 +66,5 @@
   (watch! [{:keys [watch-fns]} path watch-fn]
     (swap! watch-fns conj [path watch-fn])))
 
-(defn config-supplier
-  ([]
-     (FileConfigSupplier. nil))
-  ([file-path]
-     (FileConfigSupplier. file-path)))
+(defn config-supplier [config]
+  (FileConfigSupplier. (:path config)))
